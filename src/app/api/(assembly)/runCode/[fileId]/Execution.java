@@ -206,11 +206,9 @@ public class Execution {
         clock++;
 
         // Debugging output
-        System.out.println("Fetch Stage:");
         System.out.println("PC: " + pcHex);
-        System.out.println("Instruction Register (IR): " + ir);
-        System.out.println("Updated PC: " + pcTemp);
         System.out.println("Clock Cycle: " + clock);
+        System.out.println("Instruction Register (IR): " + ir);
     }
 
     public static int signExtend(String binary, int bitWidth) {
@@ -567,16 +565,6 @@ public class Execution {
                 return;
             }
         }
-
-        // Debug output
-        System.out.println("Decode Stage:");
-        System.out.println("Opcode: " + opcode);
-        System.out.println("rd: " + rd);
-        System.out.println("rs1: " + rs1);
-        System.out.println("rs2: " + rs2);
-        System.out.println("func3: " + func3);
-        System.out.println("func7: " + func7);
-        System.out.println("Immediate: " + immMuxB);
     }
     
     public void execute() {
@@ -746,15 +734,6 @@ public class Execution {
             mar = null;
         }
 
-        // Debug output
-        System.out.println("Execute Stage:");
-        System.out.println("ALU Operation: " + aluOp);
-        System.out.println("Operand 1 (ra): " + ((ra != null) ? ra : "NULL"));
-        System.out.println("Operand 2 (rb/imm): " + ((muxB != null && muxB) ? immMuxB : (rb != null ? rb : "NULL")));
-        System.out.println("Result (rz): " + rz);
-        if (branch != null && branch) {
-            System.out.println("Branch Taken: " + condition);
-        }
     }
 
     public void memoryAccess() {
@@ -881,13 +860,11 @@ public class Execution {
 
             // Prompt user to continue to next step
             System.out.println("--------------------------------------------------");
-            System.out.println("Press Enter to continue to the next step...");
 
             if (clock > 5000) { // Safety limit to prevent infinite loops
                 System.err.println("Error: Maximum clock cycles exceeded.");
                 break;
             }
-            System.out.println("PC: " + pcMuxPc);
         }
 
 

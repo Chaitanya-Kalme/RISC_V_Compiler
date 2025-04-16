@@ -1,5 +1,5 @@
 'use client'
-import React, { useEffect, useMemo, useRef, useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import {
   Table,
   TableBody,
@@ -21,25 +21,27 @@ interface assemblyCodeData {
   machineCode: string
 }
 
-
-type MemoryValue = string;
-type MemoryAddress = `0x${string}`;
+interface codeOutputData {
+  pc: string,
+  clock: number,
+  ir: string | null,
+  registerUpdate: { register: string, value: string } | null,
+  memoryUpdate: { memoryAddr: string, value: string } | null
+}
 
 export default function AssemblyPage() {
   const [assemblyDone, setAssemblyDone] = useState(false)
-  const [isFileOpen, setIsFileOpen] = useState(false)
   const [assemblyCode, setAssemblyCode] = useState<assemblyCodeData[]>([])
   const [registerFileSelected, setRegisterFileSelected] = useState(true)
   const [memoryFileSelected, setMemoryFileSelected] = useState(false)
   const [registerFile, setRegisterFile] = useState<Record<string, string>>({})
   const [memoryFile, setMemoryFile] = useState<Record<string, string>>({})
-  const [memoryAddress, setMemoryAddress] = useState("")
-  const memoryRef = useRef(memoryFile)
-
-
-  useEffect(() => {
-    memoryRef.current = memoryFile;
-  }, [memoryFile]);
+  const [memoryAddress, setMemoryAddress] = useState("0x000000C4")
+  const [visibleMemoryAddress, setVisibleMemoryAddress] = useState<string[]>([])
+  const [codeOutputResponse, setCodeOutputResponse] = useState<codeOutputData[]>([])
+  const [tempRegisterFile,setTempRegisterFile] = useState<Record<string, string>>({})
+  const [tempMemoryFile,setTempMemoryFile] = useState<Record<string, string>>({})
+  const [index,setIndex] = useState(0)
 
 
   const assembleCode = async () => {
@@ -53,7 +55,6 @@ export default function AssemblyPage() {
     }
 
     try {
-      setIsFileOpen(true);
 
       await axios.post(`/api/assembly/${fileId}`);
       toast.success("Code Assembled successfully");
@@ -63,17 +64,17 @@ export default function AssemblyPage() {
       setAssemblyCode(instructionList);
       setAssemblyDone(true)
 
+      const codeResponse = await axios.post(`/api/runCode/${fileId}`)
+      setCodeOutputResponse(codeResponse.data.outputArray)
+      console.log(codeResponse.data.outputArray)
+      setTempMemoryFile(codeResponse.data.memoryState)
+      setTempRegisterFile(codeResponse.data.registerFile)
     } catch (error) {
       console.error(error);
       toast.error("Error while assembling code");
     }
   }
 
-  const sortedAddresses = useMemo(() => {
-    return Object.keys(memoryFile)
-      .filter((address) => /^0x[0-9A-Fa-f]{8}$/.test(address))
-      .sort((a, b) => parseInt(a, 16) - parseInt(b, 16));
-  }, [memoryFile]);
 
   useEffect(() => {
     let registers: Record<string, string> = {};
@@ -81,118 +82,223 @@ export default function AssemblyPage() {
       let register = "x" + i.toString();
       registers[register] = "0x00000000"
     }
+    registers["x2"]="0x7FFFFFDC"
+    registers["x3"]="0x10000000"
     setRegisterFile(registers);
+    setIndex(0)
+  }, [assemblyCode])
 
-  }, [])
-
-  const visibleAddresses = useMemo(() => {
-    if (!memoryAddress || !sortedAddresses.includes(memoryAddress)) {
-      return sortedAddresses.slice(0, 50); // Default to first 50
-    }
-
-    const index = sortedAddresses.indexOf(memoryAddress);
-    const start = Math.max(0, index - 25);
-    return sortedAddresses.slice(start, start + 50);
-  }, [memoryAddress, sortedAddresses]);
-
-  const memory = useRef<Record<MemoryAddress, MemoryValue>>(
-    new Proxy({}, {
-      get(_target, prop: string | symbol): MemoryValue {
-        if (typeof prop === "string" && /^0x[0-9A-Fa-f]{8}$/.test(prop)) {
-          return memoryRef.current[prop as MemoryAddress] ?? "0x00000000";
-        }
-        return "0x00000000";
-      },
-      set(_target, prop: string | symbol, value: any): boolean {
-        if (typeof prop === "string" && /^0x[0-9A-Fa-f]{8}$/.test(prop)) {
-          const address = prop as MemoryAddress;
-          const strValue = String(value);
-          setMemoryFile(prev => ({
-            ...prev,
-            [address]: strValue,
-          }));
-          return true;
-        }
-        return false;
-      }
-    })
-  );
-
-  // Initialize memory addresses with value 0x00000000
   useEffect(() => {
     const initialMemory: Record<string, string> = {};
-    for (let i = 0; i < 100; i++) {  // Limit to 100 addresses for safety
+    for (let i = 0; i < 50; i++) {
       const address = `0x${(i * 4).toString(16).padStart(8, '0').toUpperCase()}`;
       initialMemory[address] = "00";
     }
     setMemoryFile(initialMemory);
-  }, []);
+  }, [assemblyCode]);
 
 
 
+  const visibleAddresses = () => {
 
-  // Function to render the memory in +3, +2, +1, +0 format starting from a high address
-  const renderMemoryRow = (startAddress: string) => {
-    const row: string[] = [];
-    const startAddressInt = parseInt(startAddress, 16);
-
-    // Render values for +3, +2, +1, +0 by decrementing addresses
-    for (let i = 3; i >= 0; i--) {
-      const addr = `0x${(startAddressInt - i * 4).toString(16).padStart(2, '0').toUpperCase()}`;
-      row.push(memoryFile[addr] || "00"); // Get the value from memoryFile or default to "00"
+    let baseAddressInt = parseInt(memoryAddress, 16);
+    if (baseAddressInt > 0x7FFFFFFC || baseAddressInt < 0x000000C4) {
+      if (baseAddressInt > 0x7FFFFFFC) {
+        toast.error("Address Out of Range")
+        baseAddressInt = 0x7FFFFFFC
+      }
+      else if (baseAddressInt >= 0x00000000) {
+        baseAddressInt = 0x000000C4
+      }
+      else {
+        toast.error("Address Out of Range")
+        baseAddressInt = 0x000000C4
+      }
     }
-    return row;
+
+    const visible: string[] = [];
+
+    for (let row = 0; row < 50; row++) {
+      const addr = `0x${(baseAddressInt - row * 4).toString(16).padStart(8, '0').toUpperCase()}`;
+      visible.push(addr);
+    }
+    setVisibleMemoryAddress(visible)
+    return visible;
   };
 
 
+  useEffect(() => {
+    const arr: string[] = visibleAddresses()
+    setVisibleMemoryAddress(arr)
+  }, [])
+
+
+
+
   const runCode = async () => {
-    const fileId = JSON.parse(localStorage.getItem("fileOpen") as string);
-    try {
-      await axios.post(`/api/runCode/${fileId}`);
-      toast.success("Code Run successfully");
-    } catch {
-      toast.error("Error while running code")
-    }
+    setRegisterFile(tempRegisterFile)
+    setMemoryFile(tempMemoryFile)
+    setIndex(codeOutputResponse.length-1)
+    toast.success("Code Executed Successfully")
   }
+
+  const increaseVisibleAddress = () => {
+    let memoryAddressInt = parseInt(memoryAddress, 16)
+    memoryAddressInt = memoryAddressInt + 100;
+
+    if (memoryAddressInt > 0x7FFFFFFC || memoryAddressInt < 0x000000C4) {
+      if (memoryAddressInt > 0x7FFFFFFC) {
+        toast.error("Address Out of Range")
+        memoryAddressInt = 0x7FFFFFFC
+      }
+      else if (memoryAddressInt >= 0x00000000) {
+        memoryAddressInt = 0x000000C4
+      }
+      else {
+        toast.error("Address Out of Range")
+        memoryAddressInt = 0x000000C4
+      }
+    }
+    const address = `0x${(memoryAddressInt).toString(16).padStart(8, '0').toUpperCase()}`
+    setMemoryAddress(address)
+    visibleAddresses();
+  }
+
+  const decreaseVisibleAddress = () => {
+    let memoryAddressInt = parseInt(memoryAddress, 16)
+    memoryAddressInt = memoryAddressInt - 100;
+
+    if (memoryAddressInt > 0x7FFFFFFC || memoryAddressInt < 0x000000C4) {
+      if (memoryAddressInt > 0x7FFFFFFC) {
+        toast.error("Address Out of Range")
+        memoryAddressInt = 0x7FFFFFFC
+      }
+      else if (memoryAddressInt >= 0x00000000) {
+        memoryAddressInt = 0x000000C4
+      }
+      else {
+        toast.error("Address Out of Range")
+        memoryAddressInt = 0x000000C4
+      }
+    }
+    const address = `0x${(memoryAddressInt).toString(16).padStart(8, '0').toUpperCase()}`
+    setMemoryAddress(address)
+    visibleAddresses();
+  }
+
+
+  const executeOneStep = () =>{
+    if(index>=codeOutputResponse.length){
+      toast.success("Code executed successfully")
+      return null;
+    }
+    if(codeOutputResponse[index].registerUpdate!==null){
+      const register = codeOutputResponse[index].registerUpdate.register
+      setRegisterFile((prev) =>({
+        ...prev,
+        [register]: codeOutputResponse[index].registerUpdate?.value!
+      }))
+    }
+    if (codeOutputResponse[index].memoryUpdate !== null) {
+      const memoryAddrHex = codeOutputResponse[index].memoryUpdate.memoryAddr;
+      const valueHex = codeOutputResponse[index].memoryUpdate.value.replace(/^0x/i, "").padStart(8, "0").toUpperCase();
+      const baseAddr = parseInt(memoryAddrHex, 16);
+    
+      // Little-endian: LSB first
+      const bytes = [
+        valueHex.slice(6, 8), // byte 0
+        valueHex.slice(4, 6), // byte 1
+        valueHex.slice(2, 4), // byte 2
+        valueHex.slice(0, 2), // byte 3
+      ];
+    
+      setMemoryFile((prev) => {
+        const newMem = { ...prev };
+        for (let i = 0; i < 4; i++) {
+          const addr = `0x${(baseAddr + i).toString(16).padStart(8, "0")}`;
+          newMem[addr] = bytes[i];
+        }
+        return newMem;
+      });
+    }
+    
+    if (codeOutputResponse[index].pc && codeOutputResponse[index].ir) {
+      const baseAddr = parseInt(codeOutputResponse[index].pc, 16);
+      const irHex = codeOutputResponse[index].ir.replace(/^0x/i, "").padStart(8, "0").toUpperCase();
+    
+      // Split IR into bytes (little-endian: least significant byte first)
+      const bytes = [
+        irHex.slice(6, 8), // byte 0 (LSB)
+        irHex.slice(4, 6), // byte 1
+        irHex.slice(2, 4), // byte 2
+        irHex.slice(0, 2), // byte 3 (MSB)
+      ];
+    
+      setMemoryFile((prev) => {
+        const newMem = { ...prev };
+        for (let i = 0; i < 4; i++) {
+          const addr = `0x${(baseAddr + i).toString(16).padStart(8, "0")}`;
+          newMem[addr] = bytes[i];
+        }
+        return newMem;
+      });
+    }
+    setIndex(index+1);
+  }
+  
+  const goPrevious = () =>{
+    if(index<0){
+      toast.error("Can not go Previous")
+      return null;
+    }
+    setIndex(index-1);
+  }
+
 
 
 
   return (
     <div className='mt-30 mx-5'>
-      <div className='text-center justify-center w-8/12'>
-        <span className='space-x-3'>
-          {assemblyDone && (
-            <span className='space-x-3'>
-              <button className="px-6 py-3 rounded-full bg-[#1ED760] font-bold text-white tracking-widest uppercase transform hover:scale-105 hover:bg-[#21e065] transition-colors duration-200" onClick={() => runCode()}>
-                Run Code
-              </button>
-              <button className="shadow-[0_0_0_3px_#000000_inset] px-6 py-2 bg-transparent border border-black dark:border-white dark:text-white text-black rounded-lg font-bold transform hover:-translate-y-1 transition duration-400">
-                Step
-              </button>
-              <button className="shadow-[0_0_0_3px_#000000_inset] px-6 py-2 bg-transparent border border-black dark:border-white dark:text-white text-black rounded-lg font-bold transform hover:-translate-y-1 transition duration-400">
-                Prev
-              </button>
-              <button className="p-[3px] relative">
-                <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-lg" />
-                <div className="px-8 py-2  bg-black rounded-[6px]  relative group transition duration-200 text-white hover:bg-transparent">
-                  Cycle Count:
-                </div>
-              </button>
-            </span>
-          )}
-          <span>
-            <button className="px-8 py-2 rounded-md bg-teal-500 text-white font-bold transition duration-200 hover:bg-white hover:text-black border-2 border-transparent hover:border-teal-500" onClick={() => assembleCode()}>
-              Assemble Code
+      <div className='space-x-3 flex whitespace-nowrap'>
+        {assemblyDone && (
+          <span className='space-x-3 ml-21'>
+            <button className="px-6 py-3 rounded-full bg-[#1ED760] font-bold text-white tracking-widest uppercase transform hover:scale-105 hover:bg-[#21e065] transition-colors duration-200" onClick={() => runCode()}>
+              Run Code
+            </button>
+            <button className="shadow-[0_0_0_3px_#000000_inset] px-6 py-2 bg-transparent border border-black dark:border-white dark:text-white text-black rounded-lg font-bold transform hover:-translate-y-1 transition duration-400" onClick={() => executeOneStep()}>
+              Step
+            </button>
+            <button className="shadow-[0_0_0_3px_#000000_inset] px-6 py-2 bg-transparent border border-black dark:border-white dark:text-white text-black rounded-lg font-bold transform hover:-translate-y-1 transition duration-400" onClick={() => goPrevious()}>
+              Prev
+            </button>
+            <button className="p-[3px] relative">
+              <div className="absolute inset-0 bg-gradient-to-r from-indigo-500 to-purple-500 rounded-lg" />
+              <div className="px-8 py-2  bg-black rounded-[6px]  relative group transition duration-200 text-white hover:bg-transparent">
+                Cycle Count: {codeOutputResponse[index]? codeOutputResponse[index].clock-1: "0"}
+              </div>
             </button>
           </span>
-          <span className='flex right-0 w-full text-right'>
-            <PlaceholdersAndVanishInput
-              placeholders={["Enter the memory Address"]}
-              onChange={(e) => setMemoryAddress(e.target.value)}
-              onSubmit={() => visibleAddresses}
-            />
-          </span>
+        )}
+        <span className={`${assemblyDone ? "" : "ml-130"}`}>
+          <button className="px-8 py-2 rounded-md bg-teal-500 text-white font-bold transition duration-200 hover:bg-white hover:text-black border-2 border-transparent hover:border-teal-500" onClick={() => assembleCode()}>
+            Assemble Code
+          </button>
         </span>
+        {memoryFileSelected && (<span className='flex w-full ml-34 gap-x-5'>
+          <PlaceholdersAndVanishInput
+            placeholders={["Enter the memory Address"]}
+            onChange={(e) => setMemoryAddress(e.target.value)}
+            onSubmit={() => visibleAddresses()}
+          />
+          <button className="px-4 py-2 rounded-xl border border-neutral-600 text-black bg-white hover:bg-gray-100 transition duration-200" onClick={() => increaseVisibleAddress()}>
+            Up
+          </button>
+          <button className="px-4 py-2 rounded-xl border border-neutral-600 text-black bg-white hover:bg-gray-100 transition duration-200" onClick={() => decreaseVisibleAddress()}>
+            Down
+          </button>
+        </span>)}
+      </div>
+      <div className='text-center justify-center w-8/12'>
         <div className=' flex flex-row gap-4'>
           <div className="border border-gray-300 rounded-md min-w-11/12 mt-5 overflow-x-auto overflow-y-scroll h-120 ">
             {assemblyDone && (
@@ -205,9 +311,9 @@ export default function AssemblyPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {assemblyCode.map((instruction: assemblyCodeData, index: number) => (
-                    <TableRow key={index}>
-                      <TableCell className="text-center text-lg">{instruction.pcAddress}</TableCell>
+                  {codeOutputResponse.length>0 &&  assemblyCode.map((instruction: assemblyCodeData,) => (
+                    <TableRow key={instruction.pcAddress} className={`${index<codeOutputResponse.length &&  codeOutputResponse[index].ir!==null && codeOutputResponse[index].ir ==instruction.machineCode.toUpperCase()?  "bg-amber-300":""}`}>
+                      <TableCell className="text-center text-lg" >{instruction.pcAddress}</TableCell>
                       <TableCell className="text-center text-lg">{instruction.machineCode}</TableCell>
                       <TableCell className="text-center text-lg">{instruction.instruction}</TableCell>
                     </TableRow>
@@ -257,23 +363,25 @@ export default function AssemblyPage() {
                     <TableHead className="text-center text-2xl">+1</TableHead>
                     <TableHead className="text-center text-2xl">+0</TableHead>
                   </TableRow>
-                  {Object.keys(memoryFile)
-                    .filter((address) => /^0x[0-9A-Fa-f]{8}$/.test(address)) // Only valid addresses
-                    .sort((a, b) => parseInt(a, 16) - parseInt(b, 16)) // Sort addresses in ascending order
-                    .slice(0, 50) // Limit the number of rows (you can adjust this)
-                    .map((address) => {
-                      const rowValues = renderMemoryRow(address);
-                      return (
-                        <TableRow key={address}>
-                          <TableCell>{address}</TableCell>
-                          {rowValues.map((value, index) => (
-                            <TableCell key={index} className="text-center text-lg font-mono">
-                              {value}
-                            </TableCell>
-                          ))}
-                        </TableRow>
-                      );
-                    })}
+                  {visibleMemoryAddress && visibleMemoryAddress.map((address) => {
+                    const startAddressInt = parseInt(address, 16);
+                    const rowValues = [];
+
+                    for (let i = 3; i >= 0; i--) {
+                      const addr = `0x${(startAddressInt + i).toString(16).padStart(8, '0').toUpperCase()}`;
+                      rowValues.push(memoryFile[addr] || "00");
+                    }
+                    return (
+                      <TableRow key={address}>
+                        <TableCell>{address}</TableCell>
+                        {rowValues.map((value, index) => (
+                          <TableCell key={index} className="text-center text-lg font-mono">
+                            {value}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    );
+                  })}
                 </TableBody>
               )}
             </Table>
